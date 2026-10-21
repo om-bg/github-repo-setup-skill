@@ -2,7 +2,7 @@
 
 Use these when evaluating the skill. First perform a read-only walkthrough; use a disposable repository/account only when live mutation tests are separately authorized. Do not create accounts, rotate real credentials, or change the current repository as part of documentation validation.
 
-Run the [automated package and integration tests](../tests/README.md) separately. Those tests validate assets and API recipes; the scenarios below evaluate agent decisions and remain unverified until exercised with an agent.
+Run the [automated package and integration tests](README.md) separately. Those tests validate assets and shared operations; the scenarios below evaluate agent decisions and remain unverified until exercised with an agent.
 
 | Scenario | Expected observable behavior |
 | --- | --- |

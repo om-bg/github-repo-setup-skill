@@ -1,5 +1,7 @@
 # Optional desired-state configuration
 
+**Experimental:** the existing version 1 vocabulary is unchanged. This reference describes a planning convention, not a supported configuration engine. Keep it optional; do not add schema properties as part of ordinary setup work.
+
 `.github/repo-workflow.yml` is optional data for repeatable planning. Without it, infer useful defaults and ask the user to choose. Do not create or publish this file unless requested. It is this skill's convention, not a GitHub-native automation file; GitHub does not apply it automatically.
 
 Use [repo-workflow.example.yml](../assets/repo-workflow.example.yml) as a starting point. Parse YAML safely, without custom constructors or command evaluation. Reject duplicate keys, unknown keys, unsupported versions, duplicate names, invalid colors/types, or contradictory settings before applying anything. Do not install a parser silently; use available safe parsing tools or explain the missing validation step.

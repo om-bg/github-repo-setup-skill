@@ -1,6 +1,7 @@
 """Offline package checks and failure-path tests; never contact GitHub."""
 
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -11,16 +12,21 @@ from unittest.mock import Mock, patch
 import yaml
 import test_github_integration as integration
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1] / "skills/github-repo-setup"
 DOCUMENTS = [
-    "SKILL.md", "README.md", "REVIEW.md", "references/authentication.md",
+    "SKILL.md", "references/authentication.md",
     "references/workflow-design.md", "references/github-operations.md",
     "references/security-and-recovery.md", "references/configuration.md",
-    "references/troubleshooting.md", "references/validation-scenarios.md", "tests/README.md",
+    "references/troubleshooting.md",
 ]
 
 
 class PackageTests(unittest.TestCase):
+    def test_distributable_has_no_maintainer_or_git_files(self):
+        for _, directories, files in os.walk(ROOT, followlinks=False):
+            self.assertFalse(set(directories) & {"tests", ".git", "__pycache__"})
+            self.assertNotIn("REVIEW.md", files)
+
     def test_agent_skills_metadata(self):
         text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         match = re.match(r"\A---\n(.*?)\n---\n", text, re.S)
@@ -33,15 +39,17 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(all(isinstance(key, str) and isinstance(value, str) for key, value in metadata.get("metadata", {}).items()))
 
     def test_internal_links_stay_in_package(self):
-        for name in DOCUMENTS:
-            path = ROOT / name
+        repository = ROOT.parents[1]
+        documents = [ROOT / name for name in DOCUMENTS] + [repository / name for name in ("README.md", "REVIEW.md", "tests/README.md", "tests/scenarios.md")]
+        for path in documents:
             for target in re.findall(r"\[[^\]]*\]\(([^)]+)\)", path.read_text(encoding="utf-8")):
                 if target.startswith(("https://", "http://", "#")):
                     continue
                 destination = (path.parent / target.split("#", 1)[0]).resolve()
-                self.assertTrue(destination.is_relative_to(ROOT), (name, target))
+                boundary = ROOT if path.is_relative_to(ROOT) else repository
+                self.assertTrue(destination.is_relative_to(boundary), (path.name, target))
                 self.assertNotEqual(destination.name.lower(), "secret.md")
-                self.assertTrue(destination.exists(), (name, target))
+                self.assertTrue(destination.exists(), (path.name, target))
 
     def test_issue_forms_and_label_references(self):
         labels = json.loads((ROOT / "assets/labels.json").read_text(encoding="utf-8"))
