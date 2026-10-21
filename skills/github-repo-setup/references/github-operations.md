@@ -51,7 +51,7 @@ Renames, removals, and reordering are deliberately outside this additive helper.
 
 ## Views, filters, and issue associations
 
-The helper's `plan-board --name Board --visible Title Assignees Status Priority Labels` produces a board plan with the selected repository filter. Omit Priority when it is not selected. `apply-board --plan board-plan.json --approved` creates or updates the view through supported APIs; `verify-board` checks layout, filter, visible-field order, column grouping, and repository linkage separately.
+The helper's `plan-board --name Board --visible Title Assignees Status Priority Labels` uses the selected repository filter for a new board and preserves an existing view's filter. Omit Priority when it is not selected. `apply-board --plan board-plan.json --approved` creates or updates the view through supported APIs; `verify-board` checks layout, filter, visible-field order, column grouping, and repository linkage separately. Deliberate filter changes remain separately planned MCP/API operations.
 
 For new boards, the helper uses the documented [REST view-creation API](https://docs.github.com/en/rest/projects/views) with API version `2026-03-10`, `layout: board`, the repository filter, numeric `visible_fields`, and `vertical_group_by: [Status.databaseId]`. It resolves numeric field IDs from the selected project's GraphQL fields; node IDs and Status option IDs are not interchangeable with these IDs. User-owned projects use the owner's numeric user ID; organization-owned projects use the organization name. User-owned REST view creation does not support fine-grained or GitHub App tokens; explain this operation's authentication requirement if denied rather than changing credentials silently.
 

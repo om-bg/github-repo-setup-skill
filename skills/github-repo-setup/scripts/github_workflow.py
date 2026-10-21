@@ -230,14 +230,17 @@ class Workflow:
         require(status and status["__typename"] == "ProjectV2SingleSelectField", "missing_status")
         selected = [unique(fields, value) for value in visible]
         require(all(selected), "missing_field")
-        return {"kind": "board", "target": self.target, "name": name, "visible": visible, "before": unique(self.views(), name), "field_ids": [field["id"] for field in selected], "filter": f"repo:{self.repo}"}
+        before = unique(self.views(), name)
+        return {"kind": "board", "target": self.target, "name": name, "visible": visible, "before": before, "field_ids": [field["id"] for field in selected], "filter": before["filter"] if before else f"repo:{self.repo}"}
 
     def verify_board(self, plan):
         require(plan["target"] == self.target, "invalid_target")
         view = unique(self.views(), plan["name"])
         status = unique(self.fields(), "Status")
         checks = {"layout": bool(view and view["layout"] == "BOARD_LAYOUT"), "filter": bool(view and view["filter"] == plan["filter"]), "fields": bool(view and [field["id"] for field in view["configuration"]["visibleFields"]["nodes"]] == plan["field_ids"]), "grouping": bool(view and status and [field["id"] for field in view["verticalGroupByFields"]["nodes"]] == [status["id"]]), "repository_link": self.repository["node_id"] in {repo["id"] for repo in self.connection("repositories", "id")}}
-        manual = [] if checks["grouping"] else ["Set this board's column grouping to Status; the GraphQL update input does not expose a grouping setter. Do not recreate the view."]
+        owner_type = "orgs" if self.repository["owner"]["type"] == "Organization" else "users"
+        project_url = f"https://{self.gh.host}/{owner_type}/{self.repo.split('/')[0]}/projects/{self.number}"
+        manual = [] if checks["grouping"] else [f"Open {project_url}, select view {plan['name']!r}, and set its column field to Status. The GraphQL update input does not expose a grouping setter; keep the existing view, filter, and cards."]
         if not checks["repository_link"]:
             manual.append("Link the selected repository to this project through an authorized project-link operation.")
         return {"checks": checks, "verified": all(checks.values()), "manual": manual}
@@ -361,7 +364,7 @@ class Workflow:
         target = base if route == "direct" else branch
         require(isinstance(target, str) and bool(target), "missing_branch")
         if route != "direct":
-            require(target != base, "invalid_target")
+            require(target != base and target != self.repository.get("default_branch"), "invalid_target")
             if route == "pr":
                 require(isinstance(title, str) and bool(title.strip()) and isinstance(body, str), "invalid_input")
             ref = f"repos/{self.repo}/git/ref/heads/" + quote(target, safe="")

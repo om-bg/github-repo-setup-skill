@@ -87,6 +87,30 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(self.workflow.apply_board(plan, approved=True)["changed"])
         self.assertEqual(len(self.api.board_payloads), 1)
 
+    def test_new_board_preserves_existing_views_filters_fields_and_cards(self):
+        self.configure()
+        self.workflow.associate(1, {"Status": "Backlog", "Priority": "P1"}, approved=True)
+        self.api.views[0]["filter"] = "repo:example/remote is:open label:bug"
+        views, fields, items = deepcopy((self.api.views, self.api.fields, self.api.items))
+        result = self.workflow.apply_board(self.workflow.plan_board("Another board", ["Title", "Status"]), approved=True)
+        self.assertTrue(result["verified"])
+        self.assertEqual(views, self.api.views[:-1])
+        self.assertEqual(fields, self.api.fields)
+        self.assertEqual(items, self.api.items)
+
+    def test_existing_board_field_update_keeps_custom_filter_and_view_id(self):
+        self.configure()
+        view = self.api.views[0]
+        view["filter"] = "repo:example/remote is:open label:bug"
+        view_id = view["id"]
+        plan = self.workflow.plan_board("Board", ["Title", "Status"])
+        self.assertEqual(plan["filter"], view["filter"])
+        result = self.workflow.apply_board(plan, approved=True)
+        self.assertTrue(result["verified"])
+        self.assertEqual(view_id, self.api.views[0]["id"])
+        self.assertEqual(view["filter"], "repo:example/remote is:open label:bug")
+        self.assertEqual(len(self.api.views), 1)
+
     def test_new_organization_board_uses_organization_endpoint(self):
         self.api.repo["owner"]["type"] = "Organization"
         workflow = Workflow(self.api, "example/remote", 2)
@@ -191,6 +215,34 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(failure.exception.category, "approval_required")
         self.assertFalse(self.api.writes)
 
+    def test_pr_workflow_never_uses_default_branch_even_with_another_base(self):
+        self.api.branches["release"] = "release-sha"
+        with self.assertRaises(GitHubFailure) as failure:
+            self.workflow.publish_templates({".github/pull_request_template.md": b"Outcome"}, "pr",
+                                            branch="main", base="release", title="Templates", body="Approved changes", approved=True)
+        self.assertEqual(failure.exception.category, "invalid_target")
+        self.assertFalse(self.api.writes)
+
+    def test_contents_read_back_uses_selected_branch_and_rejects_wrong_bytes(self):
+        from unittest.mock import patch
+        path = ".github/pull_request_template.md"
+        self.workflow.content(path, b"Base content", approved=True)
+        self.api.branches["setup/templates"] = "branch-sha"
+        base_content = deepcopy(self.api.files[("main", "repos/example/remote/contents/" + path)])
+        original = self.api.request
+        reads = []
+        def wrong_read_back(endpoint, method="GET", *args, **kwargs):
+            if "/contents/" in endpoint and method == "GET":
+                reads.append(endpoint)
+                if len(reads) == 2:
+                    return base_content
+            return original(endpoint, method, *args, **kwargs)
+        with patch.object(self.api, "request", side_effect=wrong_read_back), self.assertRaises(GitHubFailure) as failure:
+            self.workflow.content(path, b"Branch content", approved=True, branch="setup/templates")
+        self.assertEqual(failure.exception.category, "verification")
+        self.assertEqual(reads, ["repos/example/remote/contents/" + path + "?ref=setup%2Ftemplates"] * 2)
+        self.assertEqual(base_content, self.api.files[("main", "repos/example/remote/contents/" + path)])
+
     def test_blocked_network_has_no_writes_and_can_resume(self):
         self.api.blocked = True
         with self.assertRaises(GitHubFailure) as failure:
@@ -215,6 +267,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(result["verified"])
         self.assertFalse(result["checks"]["grouping"])
         self.assertTrue(result["manual"])
+        self.assertIn("https://github.com/users/example/projects/2", result["manual"][0])
+        self.assertIn("'Board'", result["manual"][0])
         writes = list(self.api.writes)
         plan = self.workflow.plan_board("Board", ["Title", "Status", "Priority"])
         self.assertFalse(self.workflow.apply_board(plan, approved=True)["verified"])

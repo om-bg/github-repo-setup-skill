@@ -13,8 +13,8 @@ npx skills add om-bg/github-repo-setup-skill --skill github-repo-setup --agent c
 # Project-local Claude Code installation
 npx skills add om-bg/github-repo-setup-skill --skill github-repo-setup --agent claude-code
 
-# Local folder, run from its parent directory
-npx skills add ./github-repo-setup --skill github-repo-setup
+# Local installation, run from the cloned repository root
+npx skills add ./skills/github-repo-setup --skill github-repo-setup
 ```
 
 The [installer](https://github.com/vercel-labs/skills) handles agent selection and project-local installation. Check its current Node.js requirement before using `npx`; the skill itself does not require Node. For manual installation, place only `skills/github-repo-setup/` under your client's supported skills directory: `.agents/skills/github-repo-setup/` for Codex or `.claude/skills/github-repo-setup/` for Claude Code. Follow the client's reload/discovery procedure: [Codex](https://learn.chatgpt.com/docs/build-skills), [Claude Code](https://code.claude.com/docs/en/skills).
