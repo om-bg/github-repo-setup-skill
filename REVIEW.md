@@ -11,22 +11,24 @@
 | Tests, review, and skill entry point shared an install directory | Only `skills/github-repo-setup/` is installable; tests, README, REVIEW.md, and Git metadata stay outside |
 | Remote discovery example could read the current checkout; shells shared an assumed syntax | Explicit host/repository targeting; separate executed PowerShell and POSIX argument examples |
 | Optional desired-state YAML looked like a supported interface | Clearly experimental; existing example/schema unchanged, no YAML engine added |
+| New boards relied on GitHub's default grouping | REST creation explicitly supplies Status's numeric field ID in `vertical_group_by`; GraphQL read-back verifies actual columns |
+| Template helper could write only the default branch | Shared publication method supports direct, selected branch, and PR routes, branch-specific SHA/read-back, and repeat/partial recovery |
+| Installation used a distribution placeholder | Installation targets `om-bg/github-repo-setup-skill`; no license was selected or added |
 
 ## Executed checks
 
 - Skill metadata validation and package/asset/link checks passed.
-- 27 offline tests passed, with the live integration class skipped by default. These include stateful fresh/existing/partial setup, repeated execution, drift, pagination, blocked networking, field-ID/assignment preservation, view filters/grouping, and issue associations against the shared implementation.
+- 40 offline tests passed in this revision, with the live integration class skipped by default. These include stateful fresh/existing/partial setup, repeated execution, drift, pagination, blocked networking, field-ID/assignment preservation, view filters/grouping, and issue associations against the shared implementation. New focused cases cover explicit REST Status columns for user/organization targets, numeric-ID validation, ignored server grouping, unknown creation outcomes, direct/branch/PR template publication, branch-specific SHA handling, approval/authorization checks, and lost file/branch/PR response recovery.
 - Read-only examples ran separately under Windows PowerShell and Git Bash's POSIX shell, capturing actual native arguments without GitHub mutations. Git Bash required approved execution outside the sandbox because its local signal pipe was denied inside it.
-- The real shared CLI audit in the restricted network context returned a sanitized network error without mutation.
-- The same real read-only audit in an approved network context succeeded: repository linkage, 14 fields, 3 views, and 1 project item were read. Separate connection checks included active/archived items. An earlier API error was not reproduced; its exact cause was not established.
-- The revised live disposable-test preflight was executed. It skipped before creation because the existing credential lacks `delete_repo`; zero fixture resources were created and zero live mutation cases executed. Permissions were not expanded.
+- Earlier revision only: the real shared CLI audit in the restricted network context returned a sanitized network error without mutation; an approved read-only audit succeeded. These earlier reads do not validate this revision's numeric-ID queries or new writes.
+- Earlier revision only: the live disposable-test preflight skipped before creation because the existing credential lacked `delete_repo`. This revision did not run live tests, change permissions, or create GitHub resources.
 
 ## Remaining limits
 
-- Actual Status/Priority mutations, view creation/update, and disposable template/issue writes remain unverified against GitHub until the authorized live suite runs with cleanup access. Offline behavior tests are not evidence of those live mutations succeeding.
-- The currently documented public view input has no grouping setter. The helper updates supported view properties and verifies grouping; a different grouping produces a manual step and a nonzero verification result rather than a false completion claim.
+- This revision's REST board creation, numeric field-ID queries, Status/Priority mutations, view updates, template branch/PR publication, and issue writes remain unverified against GitHub. The opt-in live suite now includes branch/PR read-back and base-preservation checks; offline results do not prove those mutations succeed live.
+- REST view creation supports explicit columns; GraphQL view updates have no grouping setter. Existing views with different grouping still produce a manual step and a nonzero verification result; they are not recreated. User-owned REST view creation requires supported classic/OAuth authentication; fine-grained/App credentials do not support that endpoint.
 - Field helpers are additive. Renames/removals/reordering remain agent-directed migrations with impact inventory and approval. The helper will not silently replace populated choices.
 - PowerShell and a POSIX shell were exercised on Windows, not on a Linux or macOS host. MCP transport, browser onboarding, agent decisions/prompt-injection resistance, organization-owned fixtures, and published `npx skills add` installation remain unverified.
 - Experimental YAML remains a planning convention. There is no YAML synchronizer or schema expansion.
 
-Distribution was not performed. A public repository address and license remain publisher choices. See [test instructions](tests/README.md) and [agent behavior scenarios](tests/scenarios.md).
+Distribution was not performed. The owner supplied `https://github.com/om-bg/github-repo-setup-skill` as the distribution repository. No license was added; licensing awaits the owner's selection. See [test instructions](tests/README.md) and [agent behavior scenarios](tests/scenarios.md).

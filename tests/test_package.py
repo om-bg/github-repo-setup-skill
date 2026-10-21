@@ -86,6 +86,16 @@ class PackageTests(unittest.TestCase):
 
 
 class TransportTests(unittest.TestCase):
+    @patch.object(integration.shutil, "which", return_value="gh")
+    @patch.object(integration.subprocess, "run")
+    def test_rest_view_creation_pins_documented_api_version(self, run, which):
+        run.return_value = SimpleNamespace(returncode=0, stdout='{"value":{"id":1}}', stderr="")
+        payload = {"layout": "board", "vertical_group_by": [123]}
+        integration.GitHub().request("users/42/projectsV2/2/views", "POST", payload, api_version="2026-03-10")
+        argv = run.call_args.args[0]
+        self.assertIn("X-GitHub-Api-Version: 2026-03-10", argv)
+        self.assertEqual(json.loads(run.call_args.kwargs["input"]), payload)
+
     @patch.object(integration.shutil, "which", return_value=None)
     @patch.object(integration.subprocess, "run")
     def test_missing_cli_is_actionable(self, run, which):

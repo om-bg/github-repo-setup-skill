@@ -4,14 +4,14 @@ A reusable [Agent Skill](https://agentskills.io/specification) for GitHub issue 
 
 ## Installation and prerequisites
 
-The installable package is `skills/github-repo-setup/`. Keep that folder together, including references, assets, and scripts; maintainer tests, this README, REVIEW.md, and Git metadata stay outside it. Once published, replace `OWNER/REPOSITORY` below with this package's distribution repository. These are examples, not an already published package address:
+The installable package is `skills/github-repo-setup/` in [om-bg/github-repo-setup-skill](https://github.com/om-bg/github-repo-setup-skill). Keep that folder together, including references, assets, and scripts; maintainer tests, this README, REVIEW.md, and Git metadata stay outside it.
 
 ```text
 # Windows, macOS, or Linux; project-local Codex installation
-npx skills add OWNER/REPOSITORY --skill github-repo-setup --agent codex
+npx skills add om-bg/github-repo-setup-skill --skill github-repo-setup --agent codex
 
 # Project-local Claude Code installation
-npx skills add OWNER/REPOSITORY --skill github-repo-setup --agent claude-code
+npx skills add om-bg/github-repo-setup-skill --skill github-repo-setup --agent claude-code
 
 # Local folder, run from its parent directory
 npx skills add ./github-repo-setup --skill github-repo-setup

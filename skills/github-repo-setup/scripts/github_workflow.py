@@ -40,12 +40,14 @@ class GitHub:
     def __init__(self, host="github.com", token_variable=None):
         self.host, self.token_variable = host, token_variable
 
-    def request(self, endpoint, method="GET", payload=None, mutating=None, headers=False):
+    def request(self, endpoint, method="GET", payload=None, mutating=None, headers=False, api_version=None):
         executable = shutil.which("gh")
         if not executable:
             raise GitHubFailure("missing_tool")
         changes = method != "GET" if mutating is None else mutating
         argv = [executable, "api", "--hostname", self.host, "--method", method, endpoint]
+        if api_version:
+            argv.extend(["-H", f"X-GitHub-Api-Version: {api_version}"])
         if headers:
             argv.append("--include")
         if payload is not None:
@@ -86,9 +88,9 @@ class GitHub:
         return self.request("graphql", "POST", {"query": query, "variables": variables or {}}, mutating=write)["data"]
 
 
-FIELD = """__typename ... on ProjectV2Field{id name}
- ... on ProjectV2SingleSelectField{id name options{id name color description}}
- ... on ProjectV2IterationField{id name} ... on ProjectV2MultiSelectField{id name}"""
+FIELD = """__typename ... on ProjectV2Field{id name databaseId}
+ ... on ProjectV2SingleSelectField{id name databaseId options{id name color description}}
+ ... on ProjectV2IterationField{id name databaseId} ... on ProjectV2MultiSelectField{id name databaseId}"""
 VIEW = """id name layout filter
  configuration{visibleFields(first:100){nodes{FIELD} pageInfo{hasNextPage}}}
  verticalGroupByFields(first:100){nodes{FIELD} pageInfo{hasNextPage}}""".replace("FIELD", FIELD)
@@ -224,6 +226,8 @@ class Workflow:
         require(isinstance(name, str) and bool(name.strip()), "invalid_input")
         require(bool(visible) and len(set(visible)) == len(visible), "invalid_input")
         fields = self.fields()
+        status = unique(fields, "Status")
+        require(status and status["__typename"] == "ProjectV2SingleSelectField", "missing_status")
         selected = [unique(fields, value) for value in visible]
         require(all(selected), "missing_field")
         return {"kind": "board", "target": self.target, "name": name, "visible": visible, "before": unique(self.views(), name), "field_ids": [field["id"] for field in selected], "filter": f"repo:{self.repo}"}
@@ -233,7 +237,7 @@ class Workflow:
         view = unique(self.views(), plan["name"])
         status = unique(self.fields(), "Status")
         checks = {"layout": bool(view and view["layout"] == "BOARD_LAYOUT"), "filter": bool(view and view["filter"] == plan["filter"]), "fields": bool(view and [field["id"] for field in view["configuration"]["visibleFields"]["nodes"]] == plan["field_ids"]), "grouping": bool(view and status and [field["id"] for field in view["verticalGroupByFields"]["nodes"]] == [status["id"]]), "repository_link": self.repository["node_id"] in {repo["id"] for repo in self.connection("repositories", "id")}}
-        manual = [] if checks["grouping"] else ["Set this board's column grouping to Status; the public view input does not expose a grouping setter."]
+        manual = [] if checks["grouping"] else ["Set this board's column grouping to Status; the GraphQL update input does not expose a grouping setter. Do not recreate the view."]
         if not checks["repository_link"]:
             manual.append("Link the selected repository to this project through an authorized project-link operation.")
         return {"checks": checks, "verified": all(checks.values()), "manual": manual}
@@ -253,9 +257,23 @@ class Workflow:
             # A prior create may have succeeded before its filter update failed.
             require(before["layout"] == "BOARD_LAYOUT" and [field["id"] for field in before["configuration"]["visibleFields"]["nodes"]] == plan["field_ids"], "state_drift")
         if not before:
-            self.gh.graphql("mutation($input:CreateProjectV2ViewInput!){createProjectV2View(input:$input){projectV2View{id}}}", {"input": {"projectId": self.project_id, "name": plan["name"], "layout": "BOARD_LAYOUT", "configuration": {"visibleFieldIds": plan["field_ids"]}}}, write=True)
-            before = unique(self.views(), plan["name"])
-            require(before is not None, "verification")
+            fields = self.fields()
+            selected = [unique(fields, name) for name in plan["visible"]]
+            status = unique(fields, "Status")
+            # REST expects numeric field database IDs, never GraphQL node/option IDs.
+            require(all(field and type(field.get("databaseId")) is int and field["databaseId"] > 0 for field in [*selected, status]), "missing_field_id")
+            owner = self.repository["owner"]
+            if owner["type"] == "Organization":
+                owner_path = "orgs/" + self.repo.split("/")[0]
+            else:
+                require(owner["type"] == "User" and type(owner.get("id")) is int and owner["id"] > 0, "invalid_target")
+                owner_path = f"users/{owner['id']}"
+            self.gh.request(f"{owner_path}/projectsV2/{self.number}/views", "POST", {
+                "name": plan["name"], "layout": "board", "filter": plan["filter"],
+                "visible_fields": [field["databaseId"] for field in selected],
+                "vertical_group_by": [status["databaseId"]],
+            }, api_version="2026-03-10")
+            return {"changed": True, **self.verify_board(plan)}
         self.gh.graphql("mutation($input:UpdateProjectV2ViewInput!){updateProjectV2View(input:$input){projectV2View{id}}}", {"input": {"viewId": before["id"], "layout": "BOARD_LAYOUT", "filter": plan["filter"], "configuration": {"visibleFieldIds": plan["field_ids"]}}}, write=True)
         return {"changed": True, **self.verify_board(plan)}
 
@@ -304,13 +322,21 @@ class Workflow:
         require(actual["color"].lower() == color.lower() and (actual["description"] or "") == description, "verification")
         return actual
 
-    def content(self, path, value, approved=False):
-        require(approved, "approval_required")
+    @staticmethod
+    def template_path(path):
         require(bool(re.fullmatch(r"\.github/(pull_request_template\.(md|txt)|ISSUE_TEMPLATE/[A-Za-z0-9_.-]+\.(yml|yaml|md))", path)) and all(part.lower() != "secret.md" for part in path.split("/")), "invalid_path")
+
+    def content(self, path, value, approved=False, *, branch=None):
+        require(approved, "approval_required")
+        self.template_path(path)
+        require(branch is None or isinstance(branch, str) and bool(branch), "invalid_input")
         endpoint = f"repos/{self.repo}/contents/{path}"
+        read_endpoint = endpoint + ("?ref=" + quote(branch, safe="") if branch is not None else "")
         data = {"message": "chore: update repository workflow", "content": base64.b64encode(value).decode("ascii")}
+        if branch is not None:
+            data["branch"] = branch
         try:
-            existing = self.gh.request(endpoint)
+            existing = self.gh.request(read_endpoint)
         except GitHubFailure as error:
             if error.status != 404:
                 raise
@@ -319,9 +345,53 @@ class Workflow:
                 return existing["sha"]
             data["sha"] = existing["sha"]
         self.gh.request(endpoint, "PUT", data)
-        actual = self.gh.request(endpoint)
+        actual = self.gh.request(read_endpoint)
         require(base64.b64decode(actual["content"]) == value, "verification")
         return actual["sha"]
+
+    def publish_templates(self, files, route, *, branch=None, base=None, title=None, body=None, approved=False):
+        """Publish selected template bytes; branch/PR routes never write the base."""
+        require(approved, "approval_required")
+        require(route in {"direct", "branch", "pr"} and bool(files), "invalid_input")
+        for path, value in files.items():
+            self.template_path(path)
+            require(isinstance(value, bytes), "invalid_input")
+        base = base or self.repository.get("default_branch")
+        require(isinstance(base, str) and bool(base), "missing_base")
+        target = base if route == "direct" else branch
+        require(isinstance(target, str) and bool(target), "missing_branch")
+        if route != "direct":
+            require(target != base, "invalid_target")
+            if route == "pr":
+                require(isinstance(title, str) and bool(title.strip()) and isinstance(body, str), "invalid_input")
+            ref = f"repos/{self.repo}/git/ref/heads/" + quote(target, safe="")
+            try:
+                self.gh.request(ref)
+            except GitHubFailure as error:
+                if error.status != 404:
+                    raise
+                source = self.gh.request(f"repos/{self.repo}/git/ref/heads/" + quote(base, safe=""))
+                self.gh.request(f"repos/{self.repo}/git/refs", "POST", {"ref": "refs/heads/" + target, "sha": source["object"]["sha"]})
+                self.gh.request(ref)
+        for path, value in files.items():
+            self.content(path, value, approved=True, branch=target)
+        result = {"route": route, "branch": target, "base": base, "verified": True,
+                  "active_on_default_branch": target == self.repository.get("default_branch")}
+        if route == "pr":
+            head = self.repo.split("/")[0] + ":" + target
+            endpoint = f"repos/{self.repo}/pulls"
+            pulls = self.gh.request(endpoint + "?state=open&head=" + quote(head, safe="") + "&base=" + quote(base, safe="") + "&per_page=100")
+            require(len(pulls) <= 1, "ambiguous_resource")
+            if pulls:
+                pull = pulls[0]
+            else:
+                pull = self.gh.request(endpoint, "POST", {"head": target, "base": base, "title": title, "body": body})
+            actual = self.gh.request(endpoint + f"/{pull['number']}")
+            require(actual["state"] == "open" and actual["head"]["ref"] == target and actual["base"]["ref"] == base
+                    and actual["head"]["repo"]["node_id"] == self.repository["node_id"]
+                    and actual["base"]["repo"]["node_id"] == self.repository["node_id"], "verification")
+            result["pull_request"] = actual["html_url"]
+        return result
 
 
 def main():

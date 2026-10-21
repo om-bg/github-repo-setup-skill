@@ -169,6 +169,19 @@ class DisposableGitHubTests(unittest.TestCase):
             self.assertTrue(self.workflow.verify_field(plan))
             self.assertEqual(assignments, self.workflow.assignments())
 
+    def test_70_template_branch_and_pr_routes(self):
+        repository = self.gh.request(f"repos/{self.repo}")
+        base = repository["default_branch"]
+        original = self.gh.request(f"repos/{self.repo}/git/ref/heads/{quote(base, safe='')}")["object"]["sha"]
+        files = {".github/pull_request_template.md": b"## Outcome\n\nDescribe the result.\n"}
+        branch_result = self.workflow.publish_templates(files, "branch", branch="setup/templates", base=base, approved=True)
+        self.assertTrue(branch_result["verified"])
+        self.assertFalse(branch_result["active_on_default_branch"])
+        options = {"branch": "setup/templates", "base": base, "title": "Workflow templates", "body": "Disposable publication verification", "approved": True}
+        first = self.workflow.publish_templates(files, "pr", **options)
+        self.assertEqual(first, self.workflow.publish_templates(files, "pr", **options))
+        self.assertEqual(original, self.gh.request(f"repos/{self.repo}/git/ref/heads/{quote(base, safe='')}")["object"]["sha"])
+
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ from copy import deepcopy
 import base64
 import hashlib
 import re
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit, parse_qs
 
 from runtime import GitHubFailure
 
@@ -12,13 +12,16 @@ class FakeGitHub:
     host = "github.com"
 
     def __init__(self):
-        self.repo = {"node_id": "R_fixture", "owner": {"node_id": "U_fixture"}}
+        self.repo = {"node_id": "R_fixture", "default_branch": "main", "owner": {"node_id": "U_fixture", "id": 42, "type": "User"}}
         self.fields = [self.field(name, "ProjectV2Field") for name in ("Title", "Assignees", "Labels")]
         self.fields.append(self.field("Status", options=[self.option("Todo"), self.option("Done")]))
         self.views, self.items, self.labels, self.files = [], [], {}, {}
         self.issues = {1: {"node_id": "I_fixture", "number": 1}}
         self.writes, self.calls, self.counter = [], [], 100
         self.blocked, self.fail_after, self.page_size = False, None, 100
+        self.branches, self.pulls = {"main": "initial"}, []
+        self.board_payloads = []
+        self.ignore_board_grouping = False
 
     @staticmethod
     def option(name):
@@ -26,7 +29,7 @@ class FakeGitHub:
 
     @staticmethod
     def field(name, kind="ProjectV2SingleSelectField", options=None):
-        result = {"id": "field_" + name, "name": name, "__typename": kind}
+        result = {"id": "field_" + name, "databaseId": 1000 + sum(map(ord, name)), "name": name, "__typename": kind}
         if options is not None:
             result["options"] = options
         return result
@@ -52,6 +55,43 @@ class FakeGitHub:
             return deepcopy(self.repo)
         if "/issues/" in endpoint and method == "GET":
             return deepcopy(self.issues[int(endpoint.rsplit("/", 1)[1])])
+        if re.fullmatch(r"(users/42|orgs/example)/projectsV2/2/views", endpoint) and method == "POST":
+            assert kwargs.get("api_version") == "2026-03-10"
+            self.board_payloads.append(deepcopy(payload))
+            def fields(ids):
+                return [deepcopy(next(field for field in self.fields if field["databaseId"] == value)) for value in ids]
+            self.views.append({"id": self.next_id(), "name": payload["name"], "layout": "BOARD_LAYOUT", "filter": payload["filter"],
+                               "configuration": {"visibleFields": {"nodes": fields(payload["visible_fields"]), "pageInfo": {"hasNextPage": False}}},
+                               "verticalGroupByFields": {"nodes": [] if self.ignore_board_grouping else fields(payload["vertical_group_by"]), "pageInfo": {"hasNextPage": False}}})
+            self.committed("createBoardREST")
+            return {"value": {"node_id": self.views[-1]["id"]}}
+        if "/git/ref/heads/" in endpoint and method == "GET":
+            branch = unquote(endpoint.split("/git/ref/heads/", 1)[1])
+            if branch not in self.branches:
+                raise GitHubFailure("missing_or_hidden", 404)
+            return {"object": {"sha": self.branches[branch]}}
+        if endpoint.endswith("/git/refs") and method == "POST":
+            branch = payload["ref"].removeprefix("refs/heads/")
+            assert branch not in self.branches
+            source = next(name for name, sha in self.branches.items() if sha == payload["sha"])
+            for (name, path), value in list(self.files.items()):
+                if name == source:
+                    self.files[(branch, path)] = deepcopy(value)
+            self.branches[branch] = payload["sha"]
+            self.committed("branch")
+            return {"ref": payload["ref"]}
+        if "/pulls" in endpoint:
+            if method == "POST":
+                pull = {"number": len(self.pulls) + 1, "state": "open", "html_url": "https://github.com/example/remote/pull/1",
+                        "head": {"ref": payload["head"], "repo": {"node_id": self.repo["node_id"]}},
+                        "base": {"ref": payload["base"], "repo": {"node_id": self.repo["node_id"]}}}
+                self.pulls.append(pull)
+                self.committed("pull")
+                return deepcopy(pull)
+            if "?" in endpoint:
+                query = parse_qs(urlsplit(endpoint).query)
+                return deepcopy([pull for pull in self.pulls if pull["state"] == "open" and "example:" + pull["head"]["ref"] == query["head"][0] and pull["base"]["ref"] == query["base"][0]])
+            return deepcopy(next(pull for pull in self.pulls if pull["number"] == int(endpoint.rsplit("/", 1)[1])))
         if "/labels" in endpoint:
             name = unquote(endpoint.rsplit("/", 1)[1]) if "/labels/" in endpoint else payload["name"]
             if method == "GET":
@@ -63,12 +103,19 @@ class FakeGitHub:
             self.committed("label")
             return deepcopy(value)
         if "/contents/" in endpoint:
+            parsed = urlsplit(endpoint)
+            branch = parse_qs(parsed.query).get("ref", ["main"])[0] if method == "GET" else payload.get("branch", "main")
+            assert branch in self.branches
+            key = (branch, parsed.path)
             if method == "GET":
-                if endpoint not in self.files:
+                if key not in self.files:
                     raise GitHubFailure("missing_or_hidden", 404)
-                return deepcopy(self.files[endpoint])
+                return deepcopy(self.files[key])
+            if key in self.files:
+                assert payload["sha"] == self.files[key]["sha"]
             value = {"sha": hashlib.sha256(base64.b64decode(payload["content"])).hexdigest(), "content": payload["content"]}
-            self.files[endpoint] = value
+            self.files[key] = value
+            self.branches[branch] = self.next_id()
             self.committed("content")
             return {"content": deepcopy(value)}
         raise AssertionError("Unexpected test request")
@@ -100,13 +147,8 @@ class FakeGitHub:
             retained = {option["id"] for option in field["options"]}
             for item in self.items:
                 item["fieldValues"]["nodes"] = [value for value in item["fieldValues"]["nodes"] if value["field"]["id"] != field["id"] or value["optionId"] in retained]
-        elif operation in {"createProjectV2View", "updateProjectV2View"}:
-            if operation.startswith("create"):
-                status = next(field for field in self.fields if field["name"] == "Status")
-                view = {"id": self.next_id(), "name": data["name"], "layout": data["layout"], "filter": "", "verticalGroupByFields": {"nodes": [deepcopy(status)], "pageInfo": {"hasNextPage": False}}}
-                self.views.append(view)
-            else:
-                view = next(view for view in self.views if view["id"] == data["viewId"])
+        elif operation == "updateProjectV2View":
+            view = next(view for view in self.views if view["id"] == data["viewId"])
             view.update({key: data[key] for key in ("layout", "filter") if key in data})
             selected = [deepcopy(next(field for field in self.fields if field["id"] == field_id)) for field_id in data["configuration"]["visibleFieldIds"]]
             view["configuration"] = {"visibleFields": {"nodes": selected, "pageInfo": {"hasNextPage": False}}}
