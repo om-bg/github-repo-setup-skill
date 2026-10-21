@@ -10,7 +10,14 @@ Check availability without installation:
 Get-Command git, gh -ErrorAction SilentlyContinue
 ```
 
-On another shell, use its command lookup. If a needed tool is absent, identify the OS and offer the official [GitHub CLI installation](https://github.com/cli/cli#installation) or [Git installation](https://git-scm.com/downloads) path. Execute installation only within the user's authorized scope; otherwise give the exact next step. Rediscover the executable after installation or a terminal restart.
+For POSIX shells on Linux/macOS:
+
+```sh
+command -v git
+command -v gh
+```
+
+Check the agent's MCP tool catalog as well. Working MCP may cover the task without either executable. If a needed tool is absent, identify the OS and offer the official [GitHub CLI installation](https://github.com/cli/cli#installation) or [Git installation](https://git-scm.com/downloads) path. Execute installation only within the user's authorized scope; otherwise give the exact next step. Rediscover the executable after installation or a terminal restart. Do not install Node, Python, or another runtime merely because this package's optional maintenance tests use it.
 
 With an existing checkout, inspect the requested remote or `gh repo view` metadata without printing credential-bearing URLs. Without a checkout, use an explicit repository identity; remote API work can proceed without cloning. For an absent repository, prepare owner/name/visibility and use `gh repo create --help` only after creation is authorized. An empty repository may have no default branch or template directory; this is an initial state, not an authentication error.
 
@@ -33,7 +40,7 @@ Offer the route matching the requested tools. Do not require a manually created 
 
 ### CLI browser authentication
 
-When authorized, start the interactive sign-in and let the user complete the browser/device step:
+When authorized, start the interactive sign-in and let the user complete the browser/device step. For a scope that includes project writes:
 
 ```powershell
 gh auth login --hostname github.com --web --scopes project
@@ -45,7 +52,7 @@ For an existing CLI OAuth login missing Projects permission:
 gh auth refresh --hostname github.com --scopes project
 ```
 
-Request `read:project` instead for diagnosis that needs only project reads. CLI sign-in may update the host's stored credentials; explain that account-level effect before starting it. Do not select insecure storage. If the environment cannot host the interactive flow, provide the command for the user's terminal and resume with identity/access checks afterward. See [login](https://cli.github.com/manual/gh_auth_login) and [refresh](https://cli.github.com/manual/gh_auth_refresh).
+Request `read:project` instead for authorized diagnosis that needs only project reads; omit additional Projects scopes when no project operation is needed. `audit`, `plan`, and `verify` do not initiate login/refresh or alter credentials without a separate request for that onboarding action. CLI sign-in may update the host's stored credentials; explain that account-level effect before starting it. Do not select insecure storage. If the environment cannot host the interactive flow, provide the command for the user's terminal and resume with identity/access checks afterward. See [login](https://cli.github.com/manual/gh_auth_login) and [refresh](https://cli.github.com/manual/gh_auth_refresh).
 
 ### PAT onboarding when needed
 

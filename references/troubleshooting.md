@@ -4,6 +4,8 @@ Consult the matching case after a concrete symptom appears. These are reusable r
 
 Keep diagnosis scoped to the failed layer. Record the operation, sanitized error, execution context, and read-only checks. Avoid credential dumps, raw authenticated URLs, whole environment listings, or broad configuration reads.
 
+Use [failure classification and recovery](security-and-recovery.md) first for ambiguous HTTP statuses, GraphQL partial errors, or a write that may already have succeeded. The cases below provide specific remedies, not automatic permission to change credentials or configuration.
+
 ## 1. Repository works but Projects rejects the token
 
 **Confirm:** The same authenticated context can read the repository, but the target owner's project operation returns an access/scope error. Check token type, target ownership, project permissions, and current support.
@@ -110,11 +112,13 @@ For Codex, the active execution policy matters more than a file edit. Where appl
 
 **Verify:** Option IDs and each affected card's assignment match the intended mapping. This is a preventive rule, not a reason to alter unaffected cards.
 
+Before renaming/removing a populated choice, inspect active and archived usage and obtain approval covering its impact. If that inventory is unavailable, preserve it and offer an additive option instead.
+
 ## 14. Git refuses a checkout with dubious ownership
 
 **Confirm:** Check the reported path against the intended, user-trusted workspace. Do not mark an arbitrary repository safe.
 
-**Fix:** For a confirmed trusted path, use a per-command exception such as `git -c safe.directory="D:/trusted-workspace" status --short`, adapted to the actual path. Avoid user-wide or wildcard exceptions.
+**Fix:** For a confirmed trusted path, use a per-command exception such as `git -c "safe.directory=$trustedWorkspace" status --short`, using the actual shell's variable syntax and quoting. Avoid user-wide or wildcard exceptions.
 
 **Verify:** The intended Git command succeeds. This exception does not change filesystem write permissions. See [Git safe.directory](https://git-scm.com/docs/git-config#Documentation/git-config.txt-safedirectory).
 

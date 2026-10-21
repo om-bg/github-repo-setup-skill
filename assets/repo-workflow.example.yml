@@ -1,0 +1,35 @@
+# Optional desired state. Review and adapt before using as .github/repo-workflow.yml.
+# This file does not execute anything or authorize deletion.
+version: 1
+labels:
+  - name: type:task
+    color: "1D76DB"
+    description: Feature, improvement, or implementation work
+  - name: type:bug
+    color: "D73A4A"
+    description: Incorrect behavior requiring a fix
+  - name: type:refactor
+    color: "A2EEEF"
+    description: Restructure code while preserving intended behavior
+  - name: blocked
+    color: "E4A400"
+    description: Cannot proceed; explain the dependency in the issue
+templates:
+  issues: [task, bug]
+  pull_request: true
+  blank_issues: true
+project:
+  enabled: true
+  statuses:
+    - name: Backlog
+    - name: Ready
+    - name: In progress
+    - name: Review / Test
+    - name: Complete
+  priority: [P0, P1, P2]
+  views:
+    - name: Board
+      layout: board
+    - name: Backlog
+      layout: table
+      status: Backlog
