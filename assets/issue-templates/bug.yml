@@ -1,0 +1,43 @@
+name: Bug report
+description: Describe incorrect behavior with enough evidence to reproduce it.
+labels:
+  - type:bug
+body:
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and impact
+      description: What happens instead, and who or what is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Provide a minimal sequence or example. State when reproduction is intermittent or unavailable.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Relevant application version, operating system, browser, runtime, or configuration. Exclude credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and regression context
+      description: Optional sanitized logs, screenshots, related issues, and last known working version.
+  - type: textarea
+    id: verification
+    attributes:
+      label: Fix verification
+      description: Optional checks that would demonstrate the bug is resolved without a regression.

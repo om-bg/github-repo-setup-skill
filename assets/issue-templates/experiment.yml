@@ -1,0 +1,45 @@
+name: Research or experiment
+description: Gather evidence to inform a specific decision.
+labels:
+  - type:experiment
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question and decision
+      description: What uncertainty are we investigating, and which decision will the evidence inform?
+    validations:
+      required: true
+  - type: textarea
+    id: comparison
+    attributes:
+      label: Baseline and candidates
+      description: Describe the current approach and alternatives to compare, or explain why no baseline applies.
+    validations:
+      required: true
+  - type: textarea
+    id: protocol
+    attributes:
+      label: Data and protocol
+      description: Define inputs, versions, conditions, and reproducible steps. Link permitted artifacts rather than private data.
+    validations:
+      required: true
+  - type: textarea
+    id: evaluation
+    attributes:
+      label: Evaluation criteria
+      description: Define useful measurements, decision thresholds, and relevant time or resource constraints.
+    validations:
+      required: true
+  - type: textarea
+    id: completion
+    attributes:
+      label: Completion evidence
+      description: Specify the results, limitations, artifacts, and recommendation to record. A documented negative or inconclusive result can complete the experiment.
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: Related work and dependencies
+      description: Optional links to source requirements, prior experiments, or follow-up decisions.

@@ -1,0 +1,44 @@
+name: Task, feature, or refactor
+description: Define an outcome, its scope, and how completion will be verified.
+body:
+  - type: markdown
+    attributes:
+      value: Select the appropriate work-type and area labels after creating the issue.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome and problem
+      description: What should become possible or improve, and why is it needed?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Describe the intended changes. For refactors, state which behavior must be preserved.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable conditions that demonstrate completion.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: Identify relevant unit, integration, manual, or other checks. Explain anything not applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: Optional boundaries that keep this work focused.
+  - type: textarea
+    id: references
+    attributes:
+      label: Dependencies and references
+      description: Optional links to requirements, related issues, or blocking work.
