@@ -97,6 +97,7 @@ VIEW = """id name layout filter
 ITEM = """id isArchived content{... on Issue{id repository{id}}}
  fieldValues(first:100){nodes{... on ProjectV2ItemFieldSingleSelectValue{
  optionId field{... on ProjectV2SingleSelectField{id name}}}} pageInfo{hasNextPage}}"""
+DEFAULT_STATUSES = {"todo", "in progress", "done"}
 
 
 def require(condition, category="conflict"):
@@ -111,7 +112,7 @@ def unique(values, name):
 
 
 class Workflow:
-    """Explicit remote target, additive field plans, and read-back-verified writes.
+    """Explicit remote target, state-preserving field plans, and verified writes.
 
     No YAML loading, auth changes, resource deletion, or automatic rollback.
     """
@@ -180,29 +181,56 @@ class Workflow:
     def audit(self):
         return {"target": self.target, "linked": self.repository["node_id"] in {repo["id"] for repo in self.connection("repositories", "id")}, "fields": self.fields(), "views": self.views(), "items": self.items()}
 
-    def plan_field(self, name, desired):
+    def plan_field(self, name, desired, *, remove_unused_defaults=False):
         require(name in {"Status", "Priority"}, "invalid_input")
         require(bool(desired) and all(isinstance(value, str) and value.strip() for value in desired), "invalid_input")
         require(len(set(desired)) == len(desired), "invalid_input")
+        require(type(remove_unused_defaults) is bool and (not remove_unused_defaults or name == "Status"), "invalid_input")
         before = unique(self.fields(), name)
         require(before is not None or name == "Priority", "missing_status")
         require(before is None or before["__typename"] == "ProjectV2SingleSelectField", "field_type_conflict")
+        assignments = self.assignments()
         options = list(before["options"]) if before else []
+        removed, views = [], []
+        if remove_unused_defaults:
+            removed = [option for option in options if option["name"].casefold() in DEFAULT_STATUSES and option["name"] not in desired]
+            removed_ids = {option["id"] for option in removed}
+            require(not any(values.get(before["id"]) in removed_ids for values in assignments.values()), "default_status_in_use")
+            if removed:
+                views = [{"id": view["id"], "filter": view["filter"]} for view in self.views()]
+                for view in views:
+                    query = view["filter"] or ""
+                    if re.search(r"\bstatus\s*:", query, re.I):
+                        words = " " + " ".join(re.findall(r"\w+", query.casefold())) + " "
+                        require(not any(" " + option["name"].casefold() + " " in words for option in removed), "default_status_referenced")
+            options = [option for option in options if option["id"] not in removed_ids]
         for label in desired:
             if not any(option["name"] == label for option in options):
                 options.append({"name": label, "color": "GRAY", "description": ""})
-        return {"kind": "field", "target": self.target, "name": name, "desired": desired, "before": before, "options": options, "assignments": self.assignments()}
+        if remove_unused_defaults:
+            by_name = {option["name"]: option for option in options}
+            require(len(by_name) == len(options), "ambiguous_resource")
+            options = [by_name[value] for value in desired] + [option for option in options if option["name"] not in desired]
+        return {"kind": "field", "target": self.target, "name": name, "desired": desired, "before": before, "options": options, "assignments": assignments,
+                "remove_unused_defaults": remove_unused_defaults, "removed": removed, "views": views}
 
     def verify_field(self, plan):
         require(plan["target"] == self.target, "invalid_target")
         actual = unique(self.fields(), plan["name"])
         old = plan["before"]
+        removed_ids = {option["id"] for option in plan.get("removed", [])}
         if not actual or actual["__typename"] != "ProjectV2SingleSelectField":
             return False
         by_name = {option["name"]: option for option in actual["options"]}
         if not all(name in by_name for name in plan["desired"]):
             return False
-        if old and (actual["id"] != old["id"] or any(by_name.get(option["name"]) != option for option in old["options"])):
+        if old and (actual["id"] != old["id"] or any(by_name.get(option["name"]) != option for option in old["options"] if option["id"] not in removed_ids)):
+            return False
+        if any(option["id"] in removed_ids for option in actual["options"]):
+            return False
+        if plan.get("remove_unused_defaults") and [option["name"] for option in actual["options"]] != [option["name"] for option in plan["options"]]:
+            return False
+        if plan.get("views") and [{"id": view["id"], "filter": view["filter"]} for view in self.views()] != plan["views"]:
             return False
         current = self.assignments()
         return all(current.get(item_id) == values for item_id, values in plan["assignments"].items())
@@ -211,10 +239,11 @@ class Workflow:
         require(approved, "approval_required")
         require(plan.get("kind") == "field" and plan.get("target") == self.target, "invalid_target")
         # Recompute the payload: plan input is data, not authority to submit arbitrary IDs.
-        current = self.plan_field(plan["name"], plan["desired"])
+        current = self.plan_field(plan["name"], plan["desired"], remove_unused_defaults=plan.get("remove_unused_defaults", False))
         if self.verify_field(plan):
             return {"changed": False, "verified": True}
         require(current["before"] == plan["before"] and current["assignments"] == plan["assignments"], "state_drift")
+        require(current["removed"] == plan.get("removed", []) and current["views"] == plan.get("views", []), "state_drift")
         if current["before"]:
             self.gh.graphql("mutation($input:UpdateProjectV2FieldInput!){updateProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id}}}}", {"input": {"fieldId": current["before"]["id"], "singleSelectOptions": current["options"]}}, write=True)
         else:
@@ -269,8 +298,8 @@ class Workflow:
             if owner["type"] == "Organization":
                 owner_path = "orgs/" + self.repo.split("/")[0]
             else:
-                require(owner["type"] == "User" and type(owner.get("id")) is int and owner["id"] > 0, "invalid_target")
-                owner_path = f"users/{owner['id']}"
+                require(owner["type"] == "User", "invalid_target")
+                owner_path = "users/" + self.repo.split("/")[0]
             self.gh.request(f"{owner_path}/projectsV2/{self.number}/views", "POST", {
                 "name": plan["name"], "layout": "board", "filter": plan["filter"],
                 "visible_fields": [field["databaseId"] for field in selected],
@@ -397,29 +426,62 @@ class Workflow:
         return result
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Explicit-target Projects V2 operations; review plans before approved writes.")
-    parser.add_argument("mode", choices=["audit", "plan-field", "apply-field", "verify-field", "plan-board", "apply-board", "verify-board", "associate"])
+def input_path(path):
+    """Validate an explicitly selected local input before reading any contents."""
+    require(path.name.casefold() != "secret.md" and path.resolve().name.casefold() != "secret.md", "protected_input")
+    return path
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Explicit-target workflow operations; review plans before approved writes.")
+    parser.add_argument("mode", choices=["audit", "plan-field", "apply-field", "verify-field", "plan-board", "apply-board", "verify-board", "associate", "publish-templates"])
     parser.add_argument("--repo", required=True, help="OWNER/REPO; never inferred from the current checkout")
-    parser.add_argument("--project", required=True, type=int)
+    parser.add_argument("--project", type=int, help="Required for Projects operations; unnecessary for template publishing")
     parser.add_argument("--host", default="github.com")
     parser.add_argument("--name")
     parser.add_argument("--options", nargs="+")
+    parser.add_argument("--remove-unused-default-statuses", action="store_true", help="Plan approved cleanup of unchosen GitHub default Status options; refuses used/referenced defaults")
     parser.add_argument("--visible", nargs="+", default=["Title", "Assignees", "Status", "Priority", "Labels"])
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--approved", action="store_true", help="The user has approved this concrete change; not a substitute for host execution approval")
     parser.add_argument("--issue", type=int)
     parser.add_argument("--status")
     parser.add_argument("--priority")
-    args = parser.parse_args()
+    parser.add_argument("--route", choices=["direct", "branch", "pr"])
+    parser.add_argument("--branch")
+    parser.add_argument("--base")
+    parser.add_argument("--template", nargs=2, action="append", metavar=("REMOTE_PATH", "LOCAL_FILE"), help="Repeat for each explicitly selected issue/PR template")
+    parser.add_argument("--title", help="Approved PR title")
+    parser.add_argument("--body-file", type=Path, help="UTF-8 file containing the approved PR description")
+    args = parser.parse_args(argv)
     try:
-        if args.mode.startswith("apply-") or args.mode == "associate":
+        if args.mode.startswith("apply-") or args.mode in {"associate", "publish-templates"}:
             require(args.approved, "approval_required")
+        if args.mode == "publish-templates":
+            require(args.project is None and args.route is not None and bool(args.template), "invalid_input")
+            require(len({remote for remote, _ in args.template}) == len(args.template), "invalid_input")
+            if args.route != "direct":
+                require(bool(args.branch), "missing_branch")
+            if args.route == "pr":
+                require(bool(args.title) and args.body_file is not None, "invalid_input")
+            # Validate the complete input selection before opening even the first file.
+            for remote, local in args.template:
+                Workflow.template_path(remote)
+                input_path(Path(local))
+            if args.body_file:
+                input_path(args.body_file)
+            files = {remote: Path(local).read_bytes() for remote, local in args.template}
+            body = args.body_file.read_text(encoding="utf-8-sig") if args.body_file else None
+            result = Workflow(GitHub(args.host), args.repo).publish_templates(
+                files, args.route, branch=args.branch, base=args.base, title=args.title, body=body, approved=True)
+            print(json.dumps(result, indent=2))
+            return 0 if result["verified"] else 2
+        require(args.project is not None, "missing_project")
         workflow = Workflow(GitHub(args.host), args.repo, args.project)
         if args.mode == "audit":
             result = workflow.audit()
         elif args.mode == "plan-field":
-            result = workflow.plan_field(args.name, args.options or [])
+            result = workflow.plan_field(args.name, args.options or [], remove_unused_defaults=args.remove_unused_default_statuses)
         elif args.mode == "plan-board":
             result = workflow.plan_board(args.name, args.visible)
         elif args.mode == "associate":

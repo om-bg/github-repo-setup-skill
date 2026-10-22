@@ -39,6 +39,8 @@ Suggested Status options, in order:
 
 Status is independent of issue open/closed state. Discuss whether Complete also closes the issue, and how canceled/duplicate issues should appear. Preserve the old status-to-option mapping when renaming an existing board.
 
+For a new project, the chosen workflow replaces unchosen, unused GitHub defaults (`Todo`, `In Progress`, `Done`); do not leave those three alongside the selected five. Include the removals and final column order in the proposal. If an existing default has active/archived cards or view/automation dependencies, preserve it until an explicit migration is agreed. Retain other custom options and all retained option IDs.
+
 Optional Priority: P0 = urgent blocker, P1 = next delivery, P2 = later. Offer a smaller or different scheme when it fits. A new issue does not need a fabricated priority.
 
 Suggested views: Board grouped by Status and scoped to the repository; Backlog filtered to its backlog status; optional Experiments filtered by its agreed label. Suggested visible fields: Title, Assignees, Priority if selected, Labels, Status. Sorting and saved view configuration are separate from fields and filters.

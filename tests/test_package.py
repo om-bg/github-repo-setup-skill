@@ -168,6 +168,17 @@ class TransportTests(unittest.TestCase):
         self.assertFalse(client.graphql.call_args.kwargs.get("write", False))
         client.request.assert_not_called()
 
+    def test_explicit_archive_cleanup_checks_identity_and_never_deletes_repo(self):
+        client = Mock()
+        repository = {"node_id": "R_fixture", "full_name": "example/this-run", "description": "this-run", "html_url": "https://github.com/example/this-run"}
+        client.request.side_effect = [repository, {}, dict(repository, archived=True)]
+        fixture = integration.DisposableGitHubTests
+        with patch.multiple(integration, OWNER="example", CLEANUP="archive"), patch.multiple(fixture, gh=client, project_id=None, repo_id="R_fixture", repo="example/this-run", name="this-run", state={}, create=True), patch.object(fixture, "save_state"):
+            fixture.cleanup()
+            self.assertTrue(fixture.state["repository_archived"])
+        self.assertEqual([call.args[1] if len(call.args) > 1 else "GET" for call in client.request.call_args_list], ["GET", "PATCH", "GET"])
+        client.graphql.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

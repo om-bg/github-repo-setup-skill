@@ -55,7 +55,7 @@ class FakeGitHub:
             return deepcopy(self.repo)
         if "/issues/" in endpoint and method == "GET":
             return deepcopy(self.issues[int(endpoint.rsplit("/", 1)[1])])
-        if re.fullmatch(r"(users/42|orgs/example)/projectsV2/2/views", endpoint) and method == "POST":
+        if re.fullmatch(r"(users/example|orgs/example)/projectsV2/2/views", endpoint) and method == "POST":
             assert kwargs.get("api_version") == "2026-03-10"
             self.board_payloads.append(deepcopy(payload))
             def fields(ids):

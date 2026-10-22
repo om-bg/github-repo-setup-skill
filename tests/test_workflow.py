@@ -17,6 +17,79 @@ class WorkflowTests(unittest.TestCase):
         plan = self.workflow.plan_board("Board", ["Title", "Status", "Priority"])
         self.assertTrue(self.workflow.apply_board(plan, approved=True)["verified"])
 
+    def test_default_status_cleanup_leaves_only_selected_five_in_order(self):
+        desired = ["Backlog", "Ready", "In progress", "Review / Test", "Complete"]
+        self.api.fields[-1]["options"].insert(1, self.api.option("In Progress"))
+        plan = self.workflow.plan_field("Status", desired, remove_unused_defaults=True)
+        self.assertEqual([option["name"] for option in plan["removed"]], ["Todo", "In Progress", "Done"])
+        self.assertFalse(self.api.writes)
+        self.assertTrue(self.workflow.apply_field(plan, approved=True)["verified"])
+        self.assertEqual([option["name"] for option in self.api.fields[-1]["options"]], desired)
+        writes = list(self.api.writes)
+        self.assertFalse(self.workflow.apply_field(plan, approved=True)["changed"])
+        self.assertFalse(self.workflow.apply_field(self.workflow.plan_field("Status", desired, remove_unused_defaults=True), approved=True)["changed"])
+        self.assertEqual(writes, self.api.writes)
+
+    def test_default_cleanup_after_partial_setup_retains_custom_ids_and_assignments(self):
+        self.configure()
+        self.workflow.apply_field(self.workflow.plan_field("Status", ["Customer approval"]), approved=True)
+        self.workflow.associate(1, {"Status": "Backlog", "Priority": "P1"}, approved=True)
+        before = {option["name"]: deepcopy(option) for option in self.api.fields[3]["options"]}
+        assignments = self.workflow.assignments()
+        plan = self.workflow.plan_field("Status", ["Backlog", "In Review"], remove_unused_defaults=True)
+        self.assertTrue(self.workflow.apply_field(plan, approved=True)["verified"])
+        self.assertEqual([option["name"] for option in self.api.fields[3]["options"]], ["Backlog", "In Review", "Customer approval"])
+        for option in self.api.fields[3]["options"]:
+            self.assertEqual(before[option["name"]], option)
+        self.assertEqual(assignments, self.workflow.assignments())
+
+    def test_default_cleanup_refuses_active_and_archived_assignments(self):
+        for archived in (False, True):
+            with self.subTest(archived=archived):
+                api = FakeGitHub()
+                workflow = Workflow(api, "example/remote", 2)
+                workflow.associate(1, {"Status": "Todo"}, approved=True)
+                api.items[0]["isArchived"] = archived
+                before = deepcopy((api.fields, api.items, api.writes))
+                with self.assertRaises(GitHubFailure) as failure:
+                    workflow.plan_field("Status", ["Backlog"], remove_unused_defaults=True)
+                self.assertEqual(failure.exception.category, "default_status_in_use")
+                self.assertEqual(before, (api.fields, api.items, api.writes))
+
+    def test_selected_default_status_keeps_its_id_and_assignments(self):
+        self.workflow.associate(1, {"Status": "Done"}, approved=True)
+        done = deepcopy(self.api.fields[-1]["options"][-1])
+        plan = self.workflow.plan_field("Status", ["Backlog", "Done"], remove_unused_defaults=True)
+        self.assertTrue(self.workflow.apply_field(plan, approved=True)["verified"])
+        self.assertEqual(self.api.fields[-1]["options"][-1], done)
+
+    def test_default_cleanup_refuses_referenced_view_filter(self):
+        self.configure()
+        self.api.views[0]["filter"] = 'status:"Todo"'
+        before = deepcopy((self.api.fields, self.api.views, self.api.writes))
+        with self.assertRaises(GitHubFailure) as failure:
+            self.workflow.plan_field("Status", ["Backlog"], remove_unused_defaults=True)
+        self.assertEqual(failure.exception.category, "default_status_referenced")
+        self.assertEqual(before, (self.api.fields, self.api.views, self.api.writes))
+
+    def test_default_cleanup_rechecks_usage_after_plan(self):
+        plan = self.workflow.plan_field("Status", ["Backlog"], remove_unused_defaults=True)
+        self.workflow.associate(1, {"Status": "Todo"}, approved=True)
+        writes = list(self.api.writes)
+        with self.assertRaises(GitHubFailure) as failure:
+            self.workflow.apply_field(plan, approved=True)
+        self.assertEqual(failure.exception.category, "default_status_in_use")
+        self.assertEqual(writes, self.api.writes)
+
+    def test_default_cleanup_lost_response_is_reconciled(self):
+        plan = self.workflow.plan_field("Status", ["Backlog", "Complete"], remove_unused_defaults=True)
+        self.api.fail_after = "updateProjectV2Field"
+        with self.assertRaises(GitHubFailure):
+            self.workflow.apply_field(plan, approved=True)
+        writes = list(self.api.writes)
+        self.assertFalse(self.workflow.apply_field(plan, approved=True)["changed"])
+        self.assertEqual(writes, self.api.writes)
+
     def test_fresh_repository_remote_target_and_approval(self):
         self.assertEqual(self.api.calls[0], ("GET", "repos/example/remote"))
         plan = self.workflow.plan_field("Priority", ["P0", "P1"])
@@ -83,7 +156,7 @@ class WorkflowTests(unittest.TestCase):
             "visible_fields": [self.api.fields[0]["databaseId"], self.api.fields[2]["databaseId"]],
             "vertical_group_by": [self.api.fields[3]["databaseId"]],
         }])
-        self.assertIn(("POST", "users/42/projectsV2/2/views"), self.api.calls)
+        self.assertIn(("POST", "users/example/projectsV2/2/views"), self.api.calls)
         self.assertFalse(self.workflow.apply_board(plan, approved=True)["changed"])
         self.assertEqual(len(self.api.board_payloads), 1)
 

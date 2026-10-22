@@ -8,12 +8,15 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from urllib.parse import quote
 import uuid
 
 LIVE, OWNER, HOST = False, None, "github.com"
+CLEANUP = "delete"
+RESUME = None
 ROOT = Path(__file__).resolve().parents[1] / "skills/github-repo-setup"
 
 
@@ -31,19 +34,33 @@ class DisposableGitHubTests(unittest.TestCase):
             raise RuntimeError("Live owner must match the active personal account")
         scope_line = re.search(r"^x-oauth-scopes:[ \t]*(.*)$", headers, re.I | re.M)
         scopes = {value.strip() for value in scope_line[1].split(",")} if scope_line else set()
-        if not {"repo", "project", "delete_repo"} <= scopes:
+        required = {"repo", "project"} | ({"delete_repo"} if CLEANUP == "delete" else set())
+        if not required <= scopes:
             raise unittest.SkipTest("Live setup needs reported repo/project/delete_repo scopes for guarded cleanup; no resources created")
-        cls.name = "repo-workflow-test-" + uuid.uuid4().hex[:16]
+        previous = json.loads(RESUME.read_text(encoding="utf-8")) if RESUME else None
+        if previous and (previous.get("host") != HOST or previous.get("owner", "").casefold() != OWNER.casefold()
+                         or previous.get("repository") != OWNER + "/" + previous.get("run_name", "")
+                         or not re.fullmatch(r"repo-workflow-test-[a-f0-9]{16}", previous.get("run_name", ""))):
+            raise RuntimeError("Resume journal identity check failed")
+        cls.name = previous["run_name"] if previous else "repo-workflow-test-" + uuid.uuid4().hex[:16]
         cls.repo = f"{identity['login']}/{cls.name}"
         cls.repo_id = cls.project_id = None
-        cls.state = {"host": HOST, "owner": identity["login"], "run_name": cls.name, "repository": cls.repo, "phase": "starting"}
+        cls.state = {"host": HOST, "owner": identity["login"], "run_name": cls.name, "repository": cls.repo, "cleanup": CLEANUP, "phase": "starting"}
         cls.journal = Path(tempfile.mkdtemp(prefix="repo-workflow-tests-")) / "resources.json"
         cls.save_state()
         print(f"\nDisposable fixture journal: {cls.journal}", flush=True)
         cls.addClassCleanup(cls.cleanup)
         cls.state["phase"] = "repository_create_outcome_unknown"
         cls.save_state()
-        repository = cls.gh.request("user/repos", "POST", {"name": cls.name, "private": True, "auto_init": False, "has_issues": True, "description": cls.name})
+        if previous:
+            repository = cls.gh.request(f"repos/{cls.repo}")
+            if repository["node_id"] != previous["repository_id"] or repository["description"] != cls.name or not repository["private"]:
+                raise RuntimeError("Resume repository identity check failed")
+            cls.repo_id = repository["node_id"]
+            if repository["archived"]:
+                cls.gh.request(f"repos/{cls.repo}", "PATCH", {"archived": False})
+        else:
+            repository = cls.gh.request("user/repos", "POST", {"name": cls.name, "private": True, "auto_init": False, "has_issues": True, "description": cls.name})
         cls.repo_id = repository["node_id"]
         cls.state.update(repository_id=cls.repo_id, repository_url=repository["html_url"], phase="repository_created")
         cls.save_state()
@@ -81,8 +98,16 @@ class DisposableGitHubTests(unittest.TestCase):
                 repository = cls.gh.request(f"repos/{cls.repo}")
                 if repository["node_id"] != cls.repo_id or repository["full_name"].casefold() != cls.repo.casefold() or repository["description"] != cls.name:
                     raise RuntimeError("Repository cleanup identity check failed")
-                cls.gh.request(f"repos/{cls.repo}", "DELETE")
-                cls.state["repository_deleted"] = True
+                if CLEANUP == "archive":
+                    cls.gh.request(f"repos/{cls.repo}", "PATCH", {"archived": True})
+                    actual = cls.gh.request(f"repos/{cls.repo}")
+                    if not actual["archived"] or actual["node_id"] != cls.repo_id:
+                        raise RuntimeError("Repository archive verification failed")
+                    cls.state["repository_archived"] = True
+                    print(f"\nArchived disposable repository; manual deletion: {repository['html_url']}", flush=True)
+                else:
+                    cls.gh.request(f"repos/{cls.repo}", "DELETE")
+                    cls.state["repository_deleted"] = True
             except Exception as error:
                 failures.append(str(error) if isinstance(error, GitHubFailure) else "Repository cleanup failed identity/API checks")
         cls.state["cleanup_errors"] = failures
@@ -99,6 +124,8 @@ class DisposableGitHubTests(unittest.TestCase):
         self.assertTrue(result["verified"], result)
 
     def test_00_empty_repository(self):
+        if RESUME:
+            self.skipTest("Fresh empty repository was verified by the original run; resuming preserves existing fixture data")
         repository = self.gh.request(f"repos/{self.repo}")
         self.assertTrue(repository["private"])
         self.assertEqual(repository["size"], 0)
@@ -113,6 +140,18 @@ class DisposableGitHubTests(unittest.TestCase):
         self.assertEqual(existing["id"], actual["id"])
         self.assertEqual(kept["id"], self.workflow.label("keep-me", "123456", "Unrelated", approved=True)["id"])
 
+    def test_05_replace_unused_default_statuses(self):
+        desired = ["Backlog", "Ready", "In progress", "Review / Test", "Complete"]
+        plan = self.workflow.plan_field("Status", desired, remove_unused_defaults=True)
+        field_id = plan["before"]["id"]
+        self.assertTrue(self.workflow.apply_field(plan, approved=True)["verified"])
+        actual = next(field for field in self.workflow.fields() if field["name"] == "Status")
+        self.assertEqual(actual["id"], field_id)
+        self.assertEqual([option["name"] for option in actual["options"]], desired)
+        self.assertFalse(self.workflow.apply_field(plan, approved=True)["changed"])
+        repeat = self.workflow.plan_field("Status", desired, remove_unused_defaults=True)
+        self.assertFalse(self.workflow.apply_field(repeat, approved=True)["changed"])
+
     def test_20_missing_write_permission(self):
         if not os.environ.get("REPO_SETUP_READ_ONLY_TOKEN"):
             self.skipTest("No restricted fixture-readable credential supplied")
@@ -124,6 +163,7 @@ class DisposableGitHubTests(unittest.TestCase):
     def test_30_partial_setup_and_lost_response(self):
         original = self.gh.request
         created_id = None
+        label = "resume-" + uuid.uuid4().hex[:12]
         def lost_response(endpoint, method="GET", *args, **kwargs):
             nonlocal created_id
             result = original(endpoint, method, *args, **kwargs)
@@ -134,8 +174,8 @@ class DisposableGitHubTests(unittest.TestCase):
         from unittest.mock import patch
         with patch.object(self.gh, "request", side_effect=lost_response):
             with self.assertRaises(GitHubFailure):
-                self.workflow.label("resume-after-write", "123456", "Resume", approved=True)
-        self.assertEqual(created_id, self.workflow.label("resume-after-write", "123456", "Resume", approved=True)["id"])
+                self.workflow.label(label, "123456", "Resume", approved=True)
+        self.assertEqual(created_id, self.workflow.label(label, "123456", "Resume", approved=True)["id"])
         self.prepare_fields_and_board()
 
     def test_40_repeated_execution(self):
@@ -170,6 +210,7 @@ class DisposableGitHubTests(unittest.TestCase):
             self.assertEqual(assignments, self.workflow.assignments())
 
     def test_70_template_branch_and_pr_routes(self):
+        self.workflow.content(".github/ISSUE_TEMPLATE/config.yml", b"blank_issues_enabled: true\n", approved=True)
         repository = self.gh.request(f"repos/{self.repo}")
         base = repository["default_branch"]
         original = self.gh.request(f"repos/{self.repo}/git/ref/heads/{quote(base, safe='')}")["object"]["sha"]
@@ -177,9 +218,22 @@ class DisposableGitHubTests(unittest.TestCase):
         branch_result = self.workflow.publish_templates(files, "branch", branch="setup/templates", base=base, approved=True)
         self.assertTrue(branch_result["verified"])
         self.assertFalse(branch_result["active_on_default_branch"])
-        options = {"branch": "setup/templates", "base": base, "title": "Workflow templates", "body": "Disposable publication verification", "approved": True}
-        first = self.workflow.publish_templates(files, "pr", **options)
-        self.assertEqual(first, self.workflow.publish_templates(files, "pr", **options))
+        installed = Path(os.environ.get("REPO_SETUP_INSTALLED_SKILL", str(ROOT)))
+        with tempfile.TemporaryDirectory(prefix="template-publication-") as directory:
+            draft, description = Path(directory) / "draft.md", Path(directory) / "description.md"
+            draft.write_bytes(next(iter(files.values())))
+            description.write_text("Disposable publication verification", encoding="utf-8")
+            command = [sys.executable, "-B", str(installed / "scripts/github_workflow.py"), "publish-templates",
+                       "--repo", self.repo, "--host", HOST, "--route", "pr", "--branch", "setup/templates", "--base", base,
+                       "--template", next(iter(files)), str(draft), "--title", "Workflow templates", "--body-file", str(description), "--approved"]
+            first = subprocess.run(command, capture_output=True, text=True, timeout=180, cwd=directory)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            branch_sha = self.gh.request(f"repos/{self.repo}/git/ref/heads/setup%2Ftemplates")["object"]["sha"]
+            second = subprocess.run(command, capture_output=True, text=True, timeout=180, cwd=directory)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertEqual(json.loads(first.stdout), json.loads(second.stdout))
+            self.assertEqual(branch_sha, self.gh.request(f"repos/{self.repo}/git/ref/heads/setup%2Ftemplates")["object"]["sha"])
+            self.assertEqual(len(self.gh.request(f"repos/{self.repo}/pulls?state=open&head={quote(OWNER + ':setup/templates', safe='')}&base={quote(base, safe='')}")), 1)
         self.assertEqual(original, self.gh.request(f"repos/{self.repo}/git/ref/heads/{quote(base, safe='')}")["object"]["sha"])
 
 
@@ -189,8 +243,11 @@ if __name__ == "__main__":
     parser.add_argument("--live", action="store_true", help="Allow this run's disposable creation, writes, and guarded cleanup")
     parser.add_argument("--owner", help="Active personal account; required for live tests")
     parser.add_argument("--host", default="github.com")
+    parser.add_argument("--cleanup", choices=["delete", "archive"], default="delete", help="archive requires explicit approval to leave this run's private repository for manual deletion")
+    parser.add_argument("--resume-journal", type=Path, help="Resume this run's exact disposable repository after identity checks; never deletes existing contents")
     arguments, remaining = parser.parse_known_args()
     if arguments.live and not arguments.owner:
         parser.error("--owner is required with --live")
-    LIVE, OWNER, HOST = arguments.live, arguments.owner, arguments.host
+    LIVE, OWNER, HOST, CLEANUP = arguments.live, arguments.owner, arguments.host, arguments.cleanup
+    RESUME = arguments.resume_journal
     unittest.main(argv=[__file__, *remaining], verbosity=2)
